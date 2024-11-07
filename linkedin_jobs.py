@@ -1,27 +1,82 @@
-import time
-import pandas as pd
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import time
+import re  # Import the regex module
+import pandas as pd
+
+# Initialize the WebDriver (assuming Chrome)
+options = Options()
+options.add_argument('--no-sandbox')
+options.add_argument('--disable-dev-shm-usage')
+driver = webdriver.Chrome(service=Service('chromedriver.exe'), options=options)
+
+
+def linkedin_login(driver):
+    # Open LinkedIn login page
+    driver.get("https://www.linkedin.com/login")
+
+    # Wait for the page to load
+    wait = WebDriverWait(driver, 15)
+    wait.until(EC.presence_of_element_located((By.ID, "username")))
+
+    # Enter credentials
+    username_field = driver.find_element(By.ID, "username")
+    password_field = driver.find_element(By.ID, "password")
+
+    username_field.send_keys("vasily.souzdenkov@gmail.com")
+    password_field.send_keys("Godric23!")
+
+    # Click the login button
+    login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
+    login_button.click()
 
 
 def get_job_details(driver, url):
     try:
         driver.get(url)
-        time.sleep(5)  # Wait for the page to load
+        wait = WebDriverWait(driver, 15)  # Explicit wait of 15 seconds
+
+        # Locate and click the "...show more" button to expand the job description
+        try:
+            show_more_button = wait.until(EC.element_to_be_clickable(
+                (By.CSS_SELECTOR, ".feed-shared-inline-show-more-text__see-more-less-toggle")))
+            driver.execute_script("arguments[0].click();", show_more_button)
+            time.sleep(2)  # Wait for the description to expand
+        except Exception as e:
+            print(f"Show more button not found or could not be clicked: {e}")
 
         # Locate and clean the job title
-        job_title_element = driver.find_element(By.CSS_SELECTOR, 'h1.top-card-layout__title')
-        job_title = job_title_element.text.strip().replace('"', '').replace("'", "")
+        try:
+            job_title_element = driver.find_element(By.CSS_SELECTOR, 'h1')
+            job_title = job_title_element.text.strip()
+            job_title = re.sub(r'[^a-zA-Z0-9\s]', '', job_title)  # Remove quotes and other non-alphanumeric characters
+        except Exception as e:
+            print(f"Job title not found: {e}")
+            job_title = None
 
         # Locate and clean the company name
-        company_name_element = driver.find_element(By.CSS_SELECTOR, 'a.topcard__org-name-link')
-        company_name = company_name_element.text.strip().replace('"', '').replace("'", "")
+        try:
+            company_name_element = driver.find_element(
+                By.CSS_SELECTOR, 'div.job-details-jobs-unified-top-card__company-name a')
+            company_name = company_name_element.text.strip()
+            company_name = re.sub(r'[^a-zA-Z0-9\s]', '', company_name)  # Remove quotes and other non-alphanumeric characters
+        except Exception as e:
+            print(f"Company name not found: {e}")
+            company_name = None
 
         # Locate and clean the job description
-        job_description_element = driver.find_element(By.CSS_SELECTOR, 'div.description__text')
-        job_description = job_description_element.text.strip().replace('"', '').replace("'", "")
+        try:
+            job_description_elements = driver.find_elements(By.CSS_SELECTOR, 'div.feed-shared-inline-show-more-text *')
+            job_description = " ".join([elem.text.strip() for elem in job_description_elements if elem.text.strip()])
+            # Remove quotes and other non-alphanumeric characters
+            job_description = re.sub(r'[^a-zA-Z0-9\s]', '', job_description)
+        except Exception as e:
+            print(f"Job description not found: {e}")
+            job_description = None
 
         return job_title, company_name, job_description
 
@@ -36,13 +91,15 @@ def extract_job_details_from_csv(csv_file, output_csv):
 
     # Set up Selenium WebDriver with additional arguments
     chrome_options = Options()
-    chrome_options.add_argument("--headless")  # Run Chrome in headless mode
     chrome_options.add_argument("--no-sandbox")  # Required for some environments
     chrome_options.add_argument("--disable-dev-shm-usage")  # Overcomes limited resource problems
     chrome_options.add_argument('--remote-debugging-port=9222')  # Avoid DevTools port issues
 
     service = Service('chromedriver.exe')  # Replace with your chromedriver path
     driver = webdriver.Chrome(service=service, options=chrome_options)
+
+    # Login to LinkedIn
+    linkedin_login(driver)
 
     job_titles = []
     company_names = []
@@ -64,6 +121,9 @@ def extract_job_details_from_csv(csv_file, output_csv):
 
     # Save the results to a new CSV file
     df.to_csv(output_csv, index=False)
+
+    # Keep the browser open for inspection
+    input("Press Enter to close the browser...")
 
     # Close the browser
     driver.quit()
