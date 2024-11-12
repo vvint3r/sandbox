@@ -5,14 +5,20 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import time
-import re  # Import the regex module
+import re
 import pandas as pd
 
 # Initialize the WebDriver (assuming Chrome)
-options = Options()
-options.add_argument('--no-sandbox')
-options.add_argument('--disable-dev-shm-usage')
-driver = webdriver.Chrome(service=Service('chromedriver.exe'), options=options)
+def initialize_driver(headless=True):
+    options = Options()
+    if headless:
+        options.add_argument('--headless')  # Run in headless mode if specified
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+
+    # Replace 'chromedriver.exe' with your chromedriver path if needed
+    driver = webdriver.Chrome(service=Service('chromedriver.exe'), options=options)
+    return driver
 
 
 def linkedin_login(driver):
@@ -34,6 +40,11 @@ def linkedin_login(driver):
     login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
     login_button.click()
 
+headless_mode = True  # Set to False to see the browser UI
+
+driver = initialize_driver(headless=headless_mode)
+
+linkedin_login(driver)
 
 def get_job_details(driver, url):
     try:
@@ -52,8 +63,7 @@ def get_job_details(driver, url):
         # Locate and clean the job title
         try:
             job_title_element = driver.find_element(By.CSS_SELECTOR, 'h1')
-            job_title = job_title_element.text.strip()
-            job_title = re.sub(r'[^a-zA-Z0-9\s]', '', job_title)  # Remove quotes and other non-alphanumeric characters
+            job_title = job_title_element.text.strip().replace('"', '').replace("'", "")
         except Exception as e:
             print(f"Job title not found: {e}")
             job_title = None
@@ -62,8 +72,7 @@ def get_job_details(driver, url):
         try:
             company_name_element = driver.find_element(
                 By.CSS_SELECTOR, 'div.job-details-jobs-unified-top-card__company-name a')
-            company_name = company_name_element.text.strip()
-            company_name = re.sub(r'[^a-zA-Z0-9\s]', '', company_name)  # Remove quotes and other non-alphanumeric characters
+            company_name = company_name_element.text.strip().replace('"', '').replace("'", "")
         except Exception as e:
             print(f"Company name not found: {e}")
             company_name = None
@@ -72,17 +81,37 @@ def get_job_details(driver, url):
         try:
             job_description_elements = driver.find_elements(By.CSS_SELECTOR, 'div.feed-shared-inline-show-more-text *')
             job_description = " ".join([elem.text.strip() for elem in job_description_elements if elem.text.strip()])
-            # Remove quotes and other non-alphanumeric characters
-            job_description = re.sub(r'[^a-zA-Z0-9\s]', '', job_description)
+            job_description = job_description.replace('"', '').replace("'", "")
         except Exception as e:
             print(f"Job description not found: {e}")
             job_description = None
 
-        return job_title, company_name, job_description
+        # Locate and extract the date posted information
+        try:
+            date_posted_element = driver.find_element(By.CSS_SELECTOR, 'span.tvm__text.tvm__text--low-emphasis')
+            date_posted_text = date_posted_element.text.strip()
+            # Translate the date posted text to an actual date
+            today = pd.Timestamp('today')
+            if 'day' in date_posted_text:
+                days_ago = int(re.search(r'(\d+) day', date_posted_text).group(1))
+                date_posted = today - pd.Timedelta(days=days_ago)
+            elif 'week' in date_posted_text:
+                weeks_ago = int(re.search(r'(\d+) week', date_posted_text).group(1))
+                date_posted = today - pd.Timedelta(weeks=weeks_ago)
+            elif 'month' in date_posted_text:
+                months_ago = int(re.search(r'(\d+) month', date_posted_text).group(1))
+                date_posted = today - pd.DateOffset(months=months_ago)
+            else:
+                date_posted = None
+        except Exception as e:
+            print(f"Date posted not found: {e}")
+            date_posted = None
+
+        return job_title, company_name, job_description, date_posted
 
     except Exception as e:
         print(f"Failed to retrieve details from {url}: {e}")
-        return None, None, None
+        return None, None, None, None
 
 
 def extract_job_details_from_csv(csv_file, output_csv):
@@ -104,20 +133,24 @@ def extract_job_details_from_csv(csv_file, output_csv):
     job_titles = []
     company_names = []
     job_descriptions = []
+    date_posted_list = []
 
     # Loop through each URL in the CSV
     for index, row in df.iterrows():
         url = row['URL']  # Assuming the column in the CSV is named 'URL'
         print(f"Processing {url}")
-        job_title, company_name, job_description = get_job_details(driver, url)
+        # Unpack all four return values from get_job_details()
+        job_title, company_name, job_description, date_posted = get_job_details(driver, url)
         job_titles.append(job_title)
         company_names.append(company_name)
         job_descriptions.append(job_description)
+        date_posted_list.append(date_posted)
 
     # Add the extracted data to the dataframe
     df['Job Title'] = job_titles
     df['Company Name'] = company_names
     df['Job Description'] = job_descriptions
+    df['Date Posted'] = date_posted_list
 
     # Save the results to a new CSV file
     df.to_csv(output_csv, index=False)
