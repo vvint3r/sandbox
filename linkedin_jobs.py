@@ -4,93 +4,126 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
 import time
+import random
 import re
 import pandas as pd
+import logging
 
 # Initialize the WebDriver (assuming Chrome)
-def initialize_driver(headless=True):
-    options = Options()
-    if headless:
-        options.add_argument('--headless')  # Run in headless mode if specified
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
+options = Options()
+options.add_argument('--no-sandbox')
+options.add_argument('--disable-blink-features=AutomationControlled')  # Avoid WebDriver detection
+options.add_argument(
+    # Spoof User-Agent
+    'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.121 Safari/537.36')
 
-    # Replace 'chromedriver.exe' with your chromedriver path if needed
-    driver = webdriver.Chrome(service=Service('chromedriver.exe'), options=options)
-    return driver
+options.add_argument('--disable-dev-shm-usage')
+options.add_argument("--log-level=3")
+
+driver = webdriver.Chrome(service=Service('chromedriver.exe'), options=options)
+
+# Disable WebDriver detection by modifying properties
+script_to_disable_webdriver = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {'source': script_to_disable_webdriver})
+
+# Function to login to LinkedIn
 
 
 def linkedin_login(driver):
-    # Open LinkedIn login page
     driver.get("https://www.linkedin.com/login")
+    try:
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.ID, "username")))
+        username_field = driver.find_element(By.ID, "username")
+        password_field = driver.find_element(By.ID, "password")
 
-    # Wait for the page to load
-    wait = WebDriverWait(driver, 15)
-    wait.until(EC.presence_of_element_located((By.ID, "username")))
+        ActionChains(driver).move_to_element(username_field).click().send_keys("vasily.souzdenkov@gmail.com").perform()
+        ActionChains(driver).move_to_element(password_field).click().send_keys("Godric23!").perform()
 
-    # Enter credentials
-    username_field = driver.find_element(By.ID, "username")
-    password_field = driver.find_element(By.ID, "password")
+        login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
+        ActionChains(driver).move_to_element(login_button).click().perform()
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located(
+            (By.ID, "global-nav")))  # Wait until the main page loads
+    except Exception as e:
+        print(f"Error during login: {e}")
+        # # # # driver.quit()  # Commented out to keep the browser open for debugging  # Commented out to keep the browser open for debugging
+        # exit()
 
-    username_field.send_keys("vasily.souzdenkov@gmail.com")
-    password_field.send_keys("Godric23!")
 
-    # Click the login button
-    login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
-    login_button.click()
-
-headless_mode = True  # Set to False to see the browser UI
-
-driver = initialize_driver(headless=headless_mode)
-
+# Login to LinkedIn
 linkedin_login(driver)
+
+# Load URLs from linkedin_jobs.csv
+try:
+    df_jobs = pd.read_csv('linkedin_jobs.csv')
+    job_links = df_jobs['URL'].tolist()
+except Exception as e:
+    print(f"Error loading URLs from CSV: {e}")
+    # driver.quit()
+    exit()
+
+# Extract detailed job information
+
 
 def get_job_details(driver, url):
     try:
         driver.get(url)
-        wait = WebDriverWait(driver, 15)  # Explicit wait of 15 seconds
+        wait = WebDriverWait(driver, 15)
+        job_title = company_name = job_description = date_posted = None
 
-        # Locate and click the "...show more" button to expand the job description
+        # Expand job description if available
         try:
             show_more_button = wait.until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, ".feed-shared-inline-show-more-text__see-more-less-toggle")))
-            driver.execute_script("arguments[0].click();", show_more_button)
-            time.sleep(2)  # Wait for the description to expand
+                (By.CSS_SELECTOR, '.feed-shared-inline-show-more-text__see-more-less-toggle')))
+            ActionChains(driver).move_to_element(show_more_button).click().perform()
+            wait.until(EC.presence_of_element_located(
+                (By.CSS_SELECTOR, '.feed-shared-inline-show-more-text--expanded')))
+            time.sleep(2)
         except Exception as e:
             print(f"Show more button not found or could not be clicked: {e}")
+            time.sleep(2)  # Retry after a brief wait
+            try:
+                show_more_button = wait.until(EC.element_to_be_clickable(
+                    (By.CSS_SELECTOR, '.feed-shared-inline-show-more-text__see-more-less-toggle')))
+                ActionChains(driver).move_to_element(show_more_button).click().perform()
+                wait.until(EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, '.feed-shared-inline-show-more-text--expanded')))
+                time.sleep(2)
+            except Exception as e:
+                print(f"Retry failed to click show more button: {e}")
 
-        # Locate and clean the job title
+        # Extract job title
         try:
             job_title_element = driver.find_element(By.CSS_SELECTOR, 'h1')
-            job_title = job_title_element.text.strip().replace('"', '').replace("'", "")
+            job_title = job_title_element.text.strip()
         except Exception as e:
             print(f"Job title not found: {e}")
-            job_title = None
 
-        # Locate and clean the company name
+        # Extract company name
         try:
             company_name_element = driver.find_element(
                 By.CSS_SELECTOR, 'div.job-details-jobs-unified-top-card__company-name a')
-            company_name = company_name_element.text.strip().replace('"', '').replace("'", "")
+            company_name = company_name_element.text.strip()
         except Exception as e:
             print(f"Company name not found: {e}")
-            company_name = None
 
-        # Locate and clean the job description
+        # Extract job description
         try:
-            job_description_elements = driver.find_elements(By.CSS_SELECTOR, 'div.feed-shared-inline-show-more-text *')
-            job_description = " ".join([elem.text.strip() for elem in job_description_elements if elem.text.strip()])
-            job_description = job_description.replace('"', '').replace("'", "")
+            # Updated selector to capture the expanded job description container
+            job_description_element = driver.find_element(By.CSS_SELECTOR, 'div.feed-shared-inline-show-more-text')
+            job_description = job_description_element.text.strip()
+            job_description = re.sub(r'[^\w\s]', '', job_description).replace('\n', ' ').strip()
         except Exception as e:
             print(f"Job description not found: {e}")
-            job_description = None
 
-        # Locate and extract the date posted information
+        # Extract date posted
         try:
-            date_posted_element = driver.find_element(By.CSS_SELECTOR, 'span.tvm__text.tvm__text--low-emphasis')
+            primary_description_container = driver.find_element(
+                By.CSS_SELECTOR, 'div.job-details-jobs-unified-top-card__primary-description-container')
+            date_posted_element = primary_description_container.find_element(By.XPATH, './/span[contains(text(), "ago")]')
             date_posted_text = date_posted_element.text.strip()
-            # Translate the date posted text to an actual date
+
             today = pd.Timestamp('today')
             if 'day' in date_posted_text:
                 days_ago = int(re.search(r'(\d+) day', date_posted_text).group(1))
@@ -104,65 +137,37 @@ def get_job_details(driver, url):
             else:
                 date_posted = None
         except Exception as e:
-            print(f"Date posted not found: {e}")
-            date_posted = None
+            print(f"Date posted not found or could not be extracted: {e}")
 
         return job_title, company_name, job_description, date_posted
-
     except Exception as e:
         print(f"Failed to retrieve details from {url}: {e}")
         return None, None, None, None
 
 
-def extract_job_details_from_csv(csv_file, output_csv):
-    # Read the CSV containing LinkedIn URLs
-    df = pd.read_csv(csv_file)
+# Extract detailed job descriptions from the loaded URLs
+job_titles = []
+company_names = []
+job_descriptions = []
+dates_posted = []
 
-    # Set up Selenium WebDriver with additional arguments
-    chrome_options = Options()
-    chrome_options.add_argument("--no-sandbox")  # Required for some environments
-    chrome_options.add_argument("--disable-dev-shm-usage")  # Overcomes limited resource problems
-    chrome_options.add_argument('--remote-debugging-port=9222')  # Avoid DevTools port issues
+for link in job_links:
+    title, company, description, date_posted = get_job_details(driver, link)
+    job_titles.append(title)
+    company_names.append(company)
+    job_descriptions.append(description)
+    dates_posted.append(date_posted)
 
-    service = Service('chromedriver.exe')  # Replace with your chromedriver path
-    driver = webdriver.Chrome(service=service, options=chrome_options)
+# Add extracted details to the DataFrame
+df_jobs['Job Title'] = job_titles
+df_jobs['Company Name'] = company_names
+df_jobs['Job Description'] = job_descriptions
+df_jobs['Date Posted'] = dates_posted
 
-    # Login to LinkedIn
-    linkedin_login(driver)
+# Save to CSV
+df_jobs.to_csv('linkedin_jobs_with_details.csv', index=False)
+print("Jobs data saved to 'linkedin_jobs_with_details.csv'")
 
-    job_titles = []
-    company_names = []
-    job_descriptions = []
-    date_posted_list = []
-
-    # Loop through each URL in the CSV
-    for index, row in df.iterrows():
-        url = row['URL']  # Assuming the column in the CSV is named 'URL'
-        print(f"Processing {url}")
-        # Unpack all four return values from get_job_details()
-        job_title, company_name, job_description, date_posted = get_job_details(driver, url)
-        job_titles.append(job_title)
-        company_names.append(company_name)
-        job_descriptions.append(job_description)
-        date_posted_list.append(date_posted)
-
-    # Add the extracted data to the dataframe
-    df['Job Title'] = job_titles
-    df['Company Name'] = company_names
-    df['Job Description'] = job_descriptions
-    df['Date Posted'] = date_posted_list
-
-    # Save the results to a new CSV file
-    df.to_csv(output_csv, index=False)
-
-    # Keep the browser open for inspection
-    input("Press Enter to close the browser...")
-
-    # Close the browser
-    driver.quit()
-
-
-# Example usage
-input_csv = 'linkedin_jobs.csv'  # Input CSV file containing LinkedIn URLs
-output_csv = 'linkedin_jobs_with_details.csv'  # Output CSV file to store job details
-extract_job_details_from_csv(input_csv, output_csv)
+# Close the driver
+# driver.quit()
+input("Press Enter to close the browser manually after debugging...")

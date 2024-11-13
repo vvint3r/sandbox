@@ -10,6 +10,7 @@ import sys
 import random
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, ElementClickInterceptedException, WebDriverException
 from selenium.webdriver import ActionChains
+import logging
 
 # Store credentials securely in environment variables
 APOLLO_EMAIL = os.getenv('APOLLO_EMAIL', 'vasily.souzdenkov@gmail.com')
@@ -26,6 +27,10 @@ options.add_argument(
     "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36")
 options.add_experimental_option("excludeSwitches", ["enable-automation"])
 options.add_experimental_option('useAutomationExtension', False)
+
+options.add_argument('--disable-dev-shm-usage')
+options.add_argument("--log-level=3")
+
 try:
     driver = webdriver.Chrome(options=options)
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
